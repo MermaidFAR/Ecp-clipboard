@@ -1,0 +1,306 @@
+mod app;
+mod theme;
+mod widgets;
+
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::Duration;
+
+use arboard::{Clipboard, ImageData};
+use eframe::egui;
+
+use crate::clipboard::ClipboardEvent;
+use crate::config::AppConfig;
+use crate::db::{ClipboardEntry, Database, EntryKind};
+
+#[derive(Clone, Debug)]
+pub enum UiCommand {
+    Toggle,
+    Status(String),
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KindFilter {
+    All,
+    Text,
+    FilePaths,
+    Image,
+}
+
+impl KindFilter {
+    fn matches(self, entry: &ClipboardEntry) -> bool {
+        match self {
+            Self::All => true,
+            Self::Text => entry.kind == EntryKind::Text,
+            Self::FilePaths => entry.kind == EntryKind::FilePaths,
+            Self::Image => entry.kind == EntryKind::Image,
+        }
+    }
+}
+
+pub(crate) struct StartupResult {
+    enabled: bool,
+    result: Result<(), String>,
+}
+
+pub struct EcpClipboardApp {
+    pub(crate) database: Database,
+    pub(crate) clipboard_rx: Receiver<ClipboardEvent>,
+    pub(crate) command_rx: Receiver<UiCommand>,
+    pub(crate) startup_tx: Sender<StartupResult>,
+    pub(crate) startup_rx: Receiver<StartupResult>,
+    pub(crate) config: AppConfig,
+    pub(crate) history: Vec<ClipboardEntry>,
+    pub(crate) search_query: String,
+    pub(crate) kind_filter: KindFilter,
+    pub(crate) show_settings: bool,
+    pub(crate) startup_pending: Option<bool>,
+    pub(crate) status_message: String,
+    pub(crate) visible: bool,
+}
+
+impl EcpClipboardApp {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        database: Database,
+        clipboard_rx: Receiver<ClipboardEvent>,
+        command_rx: Receiver<UiCommand>,
+        config: AppConfig,
+    ) -> Self {
+        theme::install(&cc.egui_ctx, config.dark_mode);
+        let (startup_tx, startup_rx) = mpsc::channel();
+
+        let mut app = Self {
+            database,
+            clipboard_rx,
+            command_rx,
+            startup_tx,
+            startup_rx,
+            config,
+            history: Vec::new(),
+            search_query: String::new(),
+            kind_filter: KindFilter::All,
+            show_settings: false,
+            startup_pending: None,
+            status_message: String::from("就绪"),
+            visible: true,
+        };
+        app.refresh_history();
+        app
+    }
+
+    pub(crate) fn refresh_history(&mut self) {
+        let result = if self.search_query.trim().is_empty() {
+            self.database.list_recent(self.config.max_history)
+        } else {
+            self.database
+                .search(&self.search_query, self.config.max_history)
+        };
+
+        match result {
+            Ok(mut history) => {
+                history.retain(|entry| self.kind_filter.matches(entry));
+                self.history = history;
+                self.status_message = format!("{} 条记录", self.history.len());
+            }
+            Err(error) => {
+                self.status_message = format!("读取数据库失败: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn save_config(&mut self) {
+        match self.config.save() {
+            Ok(()) => {
+                self.status_message = String::from("设置已保存");
+            }
+            Err(error) => {
+                self.status_message = format!("保存设置失败: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn copy_entry(&mut self, entry: &ClipboardEntry, ctx: &egui::Context) {
+        let result = match entry.kind {
+            EntryKind::Text => {
+                Clipboard::new().and_then(|mut clipboard| clipboard.set_text(entry.content.clone()))
+            }
+            EntryKind::FilePaths => copy_file_paths(&entry.content),
+            EntryKind::Image => copy_image(entry),
+        };
+
+        match result {
+            Ok(()) => {
+                self.status_message = String::from("已复制");
+                if self.config.hide_after_copy {
+                    self.visible = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+            }
+            Err(error) => {
+                self.status_message = format!("写入剪贴板失败: {error}");
+            }
+        }
+    }
+
+    fn handle_clipboard_events(&mut self) {
+        let mut changed = false;
+        while let Ok(event) = self.clipboard_rx.try_recv() {
+            let ClipboardEvent::Item {
+                kind,
+                content,
+                hash,
+                image_width,
+                image_height,
+                image_rgba,
+            } = event;
+            match self.database.insert_entry(
+                kind,
+                &content,
+                &hash,
+                image_width,
+                image_height,
+                image_rgba.as_deref(),
+            ) {
+                Ok(()) => changed = true,
+                Err(error) => {
+                    self.status_message = format!("写入数据库失败: {error}");
+                }
+            }
+        }
+
+        if changed {
+            self.refresh_history();
+        }
+    }
+
+    fn handle_commands(&mut self, ctx: &egui::Context) {
+        while let Ok(command) = self.command_rx.try_recv() {
+            match command {
+                UiCommand::Toggle => {
+                    self.visible = !self.visible;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.visible));
+                    if self.visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+                UiCommand::Status(message) => {
+                    self.status_message = message;
+                }
+                UiCommand::Exit => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
+    fn handle_startup_results(&mut self) {
+        while let Ok(result) = self.startup_rx.try_recv() {
+            self.startup_pending = None;
+            match result.result {
+                Ok(()) => {
+                    self.config.start_on_boot = result.enabled;
+                    self.status_message = if result.enabled {
+                        String::from("已启用开机自启")
+                    } else {
+                        String::from("已关闭开机自启")
+                    };
+                    self.save_config();
+                }
+                Err(error) => {
+                    self.config.start_on_boot = !result.enabled;
+                    self.status_message = format!("开机自启设置失败: {error}");
+                }
+            }
+        }
+    }
+
+    pub(crate) fn set_startup_async(&mut self, enabled: bool) {
+        self.startup_pending = Some(enabled);
+        self.status_message = if enabled {
+            String::from("正在启用开机自启...")
+        } else {
+            String::from("正在关闭开机自启...")
+        };
+        let startup_tx = self.startup_tx.clone();
+        thread::spawn(move || {
+            let result = crate::startup::set_enabled(enabled);
+            let _ = startup_tx.send(StartupResult { enabled, result });
+        });
+    }
+
+    fn handle_viewport_lifecycle(&mut self, ctx: &egui::Context) {
+        if !self.config.hide_to_tray_on_close {
+            return;
+        }
+
+        let viewport = ctx.input(|input| input.viewport().clone());
+        if viewport.close_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.visible = false;
+            self.status_message = String::from("已隐藏到托盘");
+        } else if viewport.minimized == Some(true) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.visible = false;
+            self.status_message = String::from("已最小化到托盘");
+        }
+    }
+}
+
+fn copy_image(entry: &ClipboardEntry) -> Result<(), arboard::Error> {
+    let width = entry.image_width.unwrap_or_default() as usize;
+    let height = entry.image_height.unwrap_or_default() as usize;
+    let Some(bytes) = entry.image_rgba.clone() else {
+        return Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(entry.content.clone()));
+    };
+
+    Clipboard::new().and_then(|mut clipboard| {
+        clipboard.set_image(ImageData {
+            width,
+            height,
+            bytes: bytes.into(),
+        })
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn copy_file_paths(content: &str) -> Result<(), arboard::Error> {
+    let paths = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content.to_owned()));
+    }
+
+    let _clipboard =
+        clipboard_win::Clipboard::new_attempts(10).map_err(|error| arboard::Error::Unknown {
+            description: error.to_string(),
+        })?;
+    clipboard_win::raw::set_file_list(paths.as_slice()).map_err(|error| arboard::Error::Unknown {
+        description: error.to_string(),
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn copy_file_paths(content: &str) -> Result<(), arboard::Error> {
+    Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content.to_owned()))
+}
+
+impl eframe::App for EcpClipboardApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_clipboard_events();
+        self.handle_commands(ctx);
+        self.handle_startup_results();
+        self.handle_viewport_lifecycle(ctx);
+
+        self.render(ctx);
+
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+}
