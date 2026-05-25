@@ -3,9 +3,10 @@ use std::path::Path;
 use chrono::Utc;
 use rusqlite::{Connection, Result, params};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EntryKind {
     Text,
+    Url,
     FilePaths,
     Image,
 }
@@ -14,6 +15,7 @@ impl EntryKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Text => "text",
+            Self::Url => "url",
             Self::FilePaths => "file_paths",
             Self::Image => "image",
         }
@@ -21,6 +23,7 @@ impl EntryKind {
 
     fn from_str(value: &str) -> Self {
         match value {
+            "url" => Self::Url,
             "file_paths" => Self::FilePaths,
             "image" => Self::Image,
             _ => Self::Text,

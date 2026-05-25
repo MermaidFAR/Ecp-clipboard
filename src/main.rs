@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod startup;
 mod ui;
+mod win_v_takeover;
 
 use std::error::Error;
 use std::sync::mpsc;
@@ -19,9 +20,15 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use ui::{EcpClipboardApp, UiCommand};
 
+#[cfg(target_os = "windows")]
+pub(crate) static NATIVE_WINDOW_HANDLE: AtomicIsize = AtomicIsize::new(0);
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config::AppConfig::load()?;
     let db = db::Database::open(&config.database_path()?)?;
+    if let Err(error) = win_v_takeover::configure(config.use_win_v_hotkey) {
+        eprintln!("failed to configure Win+V takeover: {error}");
+    }
 
     let (clipboard_tx, clipboard_rx) = mpsc::channel();
     let (command_tx, command_rx) = mpsc::channel();
@@ -185,12 +192,18 @@ fn spawn_hotkey_listener(
 
 #[cfg(target_os = "windows")]
 fn toggle_native_window(window_handle: &Arc<AtomicIsize>) -> bool {
+    toggle_hwnd_value(window_handle.load(Ordering::Relaxed))
+}
+
+#[cfg(target_os = "windows")]
+fn toggle_hwnd_value(hwnd_value: isize) -> bool {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsIconic, IsWindowVisible, SW_HIDE, SW_RESTORE, SetForegroundWindow, ShowWindow,
+        BringWindowToTop, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, SW_HIDE,
+        SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos,
+        ShowWindow,
     };
 
-    let hwnd_value = window_handle.load(Ordering::Relaxed);
     if hwnd_value == 0 {
         return false;
     }
@@ -201,7 +214,26 @@ fn toggle_native_window(window_handle: &Arc<AtomicIsize>) -> bool {
             let _ = ShowWindow(hwnd, SW_HIDE);
         } else {
             let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
             let _ = SetForegroundWindow(hwnd);
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_NOTOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
         }
     }
     true

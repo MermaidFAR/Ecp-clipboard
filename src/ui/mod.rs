@@ -2,6 +2,7 @@ mod app;
 mod theme;
 mod widgets;
 
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{
     Arc,
@@ -27,6 +28,7 @@ pub enum UiCommand {
 pub enum KindFilter {
     All,
     Text,
+    Url,
     FilePaths,
     Image,
 }
@@ -36,6 +38,7 @@ impl KindFilter {
         match self {
             Self::All => true,
             Self::Text => entry.kind == EntryKind::Text,
+            Self::Url => entry.kind == EntryKind::Url,
             Self::FilePaths => entry.kind == EntryKind::FilePaths,
             Self::Image => entry.kind == EntryKind::Image,
         }
@@ -128,13 +131,15 @@ impl EcpClipboardApp {
     }
 
     pub(crate) fn copy_entry(&mut self, entry: &ClipboardEntry, ctx: &egui::Context) {
-        let result = match entry.kind {
-            EntryKind::Text => {
-                Clipboard::new().and_then(|mut clipboard| clipboard.set_text(entry.content.clone()))
-            }
-            EntryKind::FilePaths => copy_file_paths(&entry.content),
-            EntryKind::Image => copy_image(entry),
-        };
+        let result =
+            match entry.kind {
+                EntryKind::Text => Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.set_text(entry.content.clone())),
+                EntryKind::Url => Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.set_text(entry.content.clone())),
+                EntryKind::FilePaths => copy_file_paths(&entry.content),
+                EntryKind::Image => copy_image(entry),
+            };
 
         match result {
             Ok(()) => {
@@ -146,6 +151,17 @@ impl EcpClipboardApp {
             }
             Err(error) => {
                 self.status_message = format!("写入剪贴板失败: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn open_url_entry(&mut self, entry: &ClipboardEntry) {
+        match open_url(&entry.content) {
+            Ok(()) => {
+                self.status_message = String::from("已打开网址");
+            }
+            Err(error) => {
+                self.status_message = format!("打开网址失败: {error}");
             }
         }
     }
@@ -191,7 +207,7 @@ impl EcpClipboardApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     } else {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.hide_to_tray(ctx, "已隐藏到托盘");
                     }
                 }
             }
@@ -241,28 +257,29 @@ impl EcpClipboardApp {
         let viewport = ctx.input(|input| input.viewport().clone());
         if viewport.close_requested() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.visible = false;
-            self.status_message = String::from("已隐藏到托盘");
+            self.hide_to_tray(ctx, "已隐藏到托盘");
         } else if viewport.minimized == Some(true) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.visible = false;
-            self.status_message = String::from("已最小化到托盘");
+            self.hide_to_tray(ctx, "已最小化到托盘");
         }
     }
 
-    fn capture_window_handle(&self, frame: &eframe::Frame) {
-        if self.window_handle.load(Ordering::Relaxed) != 0 {
-            return;
+    fn hide_to_tray(&mut self, ctx: &egui::Context, message: &str) {
+        self.visible = false;
+        if !hide_native_window(&self.window_handle) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
+        self.status_message = String::from(message);
+    }
 
+    fn capture_window_handle(&self, frame: &eframe::Frame) {
         let Ok(handle) = frame.window_handle() else {
             return;
         };
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-            self.window_handle
-                .store(handle.hwnd.get(), Ordering::Relaxed);
+            let hwnd = handle.hwnd.get();
+            self.window_handle.store(hwnd, Ordering::Relaxed);
+            crate::NATIVE_WINDOW_HANDLE.store(hwnd, Ordering::Relaxed);
         }
     }
 }
@@ -307,6 +324,88 @@ fn copy_file_paths(content: &str) -> Result<(), arboard::Error> {
 #[cfg(not(target_os = "windows"))]
 fn copy_file_paths(content: &str) -> Result<(), arboard::Error> {
     Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content.to_owned()))
+}
+
+#[cfg(target_os = "windows")]
+fn hide_native_window(window_handle: &Arc<AtomicIsize>) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+
+    let hwnd_value = window_handle.load(Ordering::Relaxed);
+    if hwnd_value == 0 {
+        return false;
+    }
+
+    unsafe {
+        let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    hide_current_process_windows();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(80));
+        unsafe {
+            let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+        hide_current_process_windows();
+    });
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn hide_current_process_windows() {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let process_id = std::process::id();
+    unsafe {
+        let _ = EnumWindows(Some(hide_process_window_proc), LPARAM(process_id as isize));
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn hide_process_window_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::core::BOOL {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, SW_HIDE, ShowWindow};
+
+    let mut window_process_id = 0_u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut window_process_id));
+        if window_process_id == lparam.0 as u32 {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+    true.into()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_native_window(_window_handle: &Arc<AtomicIsize>) -> bool {
+    false
+}
+
+fn open_url(content: &str) -> Result<(), String> {
+    let url = content.trim();
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://"))
+        || url.chars().any(char::is_whitespace)
+    {
+        return Err(String::from("不是有效的 http/https 网址"));
+    }
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("explorer").arg(url).status();
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(url).status();
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let status = Command::new("xdg-open").arg(url).status();
+
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("打开命令返回失败状态: {status}")),
+        Err(error) => Err(format!("无法调用系统浏览器: {error}")),
+    }
 }
 
 impl eframe::App for EcpClipboardApp {

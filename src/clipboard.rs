@@ -88,10 +88,11 @@ pub fn spawn_watcher(
                         continue;
                     }
 
-                    let hash = hash_text(&content);
+                    let kind = classify_text_kind(&content);
+                    let hash = hash_text(kind, &content);
                     if hash != last_hash {
                         let event = ClipboardEvent::Item {
-                            kind: EntryKind::Text,
+                            kind,
                             content,
                             hash,
                             image_width: None,
@@ -129,8 +130,20 @@ fn send_if_new(
     event_tx.send(event).is_ok()
 }
 
-fn hash_text(content: &str) -> String {
-    hash_parts(EntryKind::Text, content, &[])
+fn classify_text_kind(content: &str) -> EntryKind {
+    let trimmed = content.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !trimmed.chars().any(char::is_whitespace)
+    {
+        EntryKind::Url
+    } else {
+        EntryKind::Text
+    }
+}
+
+fn hash_text(kind: EntryKind, content: &str) -> String {
+    hash_parts(kind, content, &[])
 }
 
 fn hash_parts(kind: EntryKind, content: &str, bytes: &[u8]) -> String {

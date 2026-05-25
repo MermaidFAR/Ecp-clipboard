@@ -58,6 +58,7 @@ pub fn history_card(ui: &mut egui::Ui, entry: &ClipboardEntry, timestamp: String
 fn kind_label(kind: &EntryKind) -> &'static str {
     match kind {
         EntryKind::Text => "文本",
+        EntryKind::Url => "网址",
         EntryKind::FilePaths => "文件",
         EntryKind::Image => "图片",
     }
@@ -92,6 +93,7 @@ fn image_preview(ui: &mut egui::Ui, entry: &ClipboardEntry) {
 fn meta_text(entry: &ClipboardEntry) -> String {
     match entry.kind {
         EntryKind::Text => format!("{} chars", entry.content.chars().count()),
+        EntryKind::Url => String::from("点击打开网址"),
         EntryKind::FilePaths => {
             let count = entry.content.lines().count();
             if entry.image_rgba.is_some() {

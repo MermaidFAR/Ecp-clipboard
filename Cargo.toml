@@ -8,7 +8,7 @@ arboard = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clipboard-win = "5.4"
 directories = "6"
-eframe = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.31"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 raw-window-handle = "0.6"
@@ -21,3 +21,6 @@ windows = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

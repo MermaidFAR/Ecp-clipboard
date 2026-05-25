@@ -1,7 +1,7 @@
 use chrono::{Local, TimeZone};
 use eframe::egui::{self, Align, DragValue, Layout, RichText, TextEdit};
 
-use crate::db::ClipboardEntry;
+use crate::db::{ClipboardEntry, EntryKind};
 
 use super::{EcpClipboardApp, KindFilter, theme, widgets};
 
@@ -32,6 +32,7 @@ impl EcpClipboardApp {
             ui.horizontal_wrapped(|ui| {
                 filter_button(ui, &mut self.kind_filter, KindFilter::All, "全部");
                 filter_button(ui, &mut self.kind_filter, KindFilter::Text, "文本");
+                filter_button(ui, &mut self.kind_filter, KindFilter::Url, "网址");
                 filter_button(ui, &mut self.kind_filter, KindFilter::FilePaths, "文件");
                 filter_button(ui, &mut self.kind_filter, KindFilter::Image, "图片");
             });
@@ -112,7 +113,11 @@ impl EcpClipboardApp {
                     for entry in self.history.clone() {
                         let response = widgets::history_card(ui, &entry, format_timestamp(&entry));
                         if response.clicked() {
-                            self.copy_entry(&entry, ctx);
+                            if entry.kind == EntryKind::Url {
+                                self.open_url_entry(&entry);
+                            } else {
+                                self.copy_entry(&entry, ctx);
+                            }
                         } else if response.secondary_clicked() {
                             match self.database.delete_entry(entry.id) {
                                 Ok(true) => {
