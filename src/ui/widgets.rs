@@ -3,9 +3,17 @@ use eframe::egui::{
     TextureOptions,
 };
 
+use crate::config::Language;
 use crate::db::{ClipboardEntry, EntryKind};
 
-pub fn history_card(ui: &mut egui::Ui, entry: &ClipboardEntry, timestamp: String) -> Response {
+use super::i18n;
+
+pub fn history_card(
+    ui: &mut egui::Ui,
+    entry: &ClipboardEntry,
+    timestamp: String,
+    language: Language,
+) -> Response {
     let dark_mode = ui.visuals().dark_mode;
     let fill = if dark_mode {
         Color32::from_rgb(34, 40, 54)
@@ -27,7 +35,11 @@ pub fn history_card(ui: &mut egui::Ui, entry: &ClipboardEntry, timestamp: String
             ui.set_width(ui.available_width());
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(kind_label(&entry.kind)).small().strong());
+                    ui.label(
+                        RichText::new(i18n::kind_label(language, &entry.kind))
+                            .small()
+                            .strong(),
+                    );
                     ui.label(RichText::new(format!("#{}", entry.id)).small().weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(timestamp).small().weak());
@@ -44,7 +56,11 @@ pub fn history_card(ui: &mut egui::Ui, entry: &ClipboardEntry, timestamp: String
                     ui.label(preview(&entry.content, 260));
                 }
                 ui.add_space(2.0);
-                ui.label(RichText::new(meta_text(entry)).small().weak());
+                ui.label(
+                    RichText::new(i18n::meta_text(language, entry))
+                        .small()
+                        .weak(),
+                );
             });
         });
 
@@ -53,15 +69,6 @@ pub fn history_card(ui: &mut egui::Ui, entry: &ClipboardEntry, timestamp: String
         inner.response.id.with(entry.id),
         Sense::click(),
     )
-}
-
-fn kind_label(kind: &EntryKind) -> &'static str {
-    match kind {
-        EntryKind::Text => "文本",
-        EntryKind::Url => "网址",
-        EntryKind::FilePaths => "文件",
-        EntryKind::Image => "图片",
-    }
 }
 
 fn image_preview(ui: &mut egui::Ui, entry: &ClipboardEntry) {
@@ -88,25 +95,6 @@ fn image_preview(ui: &mut egui::Ui, entry: &ClipboardEntry) {
     let aspect = width as f32 / height.max(1) as f32;
     let size = egui::vec2(max_width, max_width / aspect);
     ui.image((texture.id(), size));
-}
-
-fn meta_text(entry: &ClipboardEntry) -> String {
-    match entry.kind {
-        EntryKind::Text => format!("{} chars", entry.content.chars().count()),
-        EntryKind::Url => String::from("点击打开网址"),
-        EntryKind::FilePaths => {
-            let count = entry.content.lines().count();
-            if entry.image_rgba.is_some() {
-                format!("{count} 个路径 · 含图片缩略图")
-            } else {
-                format!("{count} 个路径")
-            }
-        }
-        EntryKind::Image => match (entry.image_width, entry.image_height) {
-            (Some(width), Some(height)) => format!("缩略图 {width}x{height}"),
-            _ => String::from("缩略图不可用"),
-        },
-    }
 }
 
 fn preview(content: &str, max_chars: usize) -> String {

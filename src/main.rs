@@ -43,7 +43,7 @@ fn run_background(config: config::AppConfig) -> Result<(), Box<dyn Error>> {
     let _clipboard_thread = clipboard::spawn_watcher(clipboard_tx, config.poll_interval());
     let _database_thread = spawn_database_writer(database_path, clipboard_rx);
     let _hotkey_thread = spawn_hotkey_listener(config.use_win_v_hotkey);
-    let _tray_icon = create_tray()?;
+    let _tray_icon = create_tray(config.language)?;
 
     run_background_event_loop()
 }
@@ -116,10 +116,14 @@ fn spawn_database_writer(
     })
 }
 
-fn create_tray() -> Result<TrayIcon, Box<dyn Error>> {
+fn create_tray(language: config::Language) -> Result<TrayIcon, Box<dyn Error>> {
     let menu = Menu::new();
-    let show_item = MenuItem::new("显示 / 隐藏", true, None);
-    let exit_item = MenuItem::new("退出", true, None);
+    let (show_label, exit_label) = match language {
+        config::Language::ZhCn => ("显示 / 隐藏", "退出"),
+        config::Language::En => ("Show / Hide", "Exit"),
+    };
+    let show_item = MenuItem::new(show_label, true, None);
+    let exit_item = MenuItem::new(exit_label, true, None);
     let show_id = show_item.id().clone();
     let exit_id = exit_item.id().clone();
 

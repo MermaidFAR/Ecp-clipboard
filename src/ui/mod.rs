@@ -1,4 +1,5 @@
 mod app;
+mod i18n;
 mod theme;
 mod widgets;
 
@@ -16,7 +17,7 @@ use eframe::egui;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::clipboard::ClipboardEvent;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Language};
 use crate::db::{ClipboardEntry, Database, EntryKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +74,7 @@ impl EcpClipboardApp {
     ) -> Self {
         theme::install(&cc.egui_ctx, config.dark_mode);
         let (startup_tx, startup_rx) = mpsc::channel();
+        let language = config.language;
 
         let mut app = Self {
             database,
@@ -86,7 +88,7 @@ impl EcpClipboardApp {
             kind_filter: KindFilter::All,
             show_settings: false,
             startup_pending: None,
-            status_message: String::from("就绪"),
+            status_message: i18n::ready(language).to_owned(),
             visible: true,
             release_on_hide,
         };
@@ -106,10 +108,10 @@ impl EcpClipboardApp {
             Ok(mut history) => {
                 history.retain(|entry| self.kind_filter.matches(entry));
                 self.history = history;
-                self.status_message = format!("{} 条记录", self.history.len());
+                self.status_message = i18n::record_count(self.config.language, self.history.len());
             }
             Err(error) => {
-                self.status_message = format!("读取数据库失败: {error}");
+                self.status_message = i18n::database_read_failed(self.config.language, &error);
             }
         }
     }
@@ -117,10 +119,10 @@ impl EcpClipboardApp {
     pub(crate) fn save_config(&mut self) {
         match self.config.save() {
             Ok(()) => {
-                self.status_message = String::from("设置已保存");
+                self.status_message = i18n::settings_saved(self.config.language).to_owned();
             }
             Err(error) => {
-                self.status_message = format!("保存设置失败: {error}");
+                self.status_message = i18n::settings_save_failed(self.config.language, &error);
             }
         }
     }
@@ -138,24 +140,24 @@ impl EcpClipboardApp {
 
         match result {
             Ok(()) => {
-                self.status_message = String::from("已复制");
+                self.status_message = i18n::copied(self.config.language).to_owned();
                 if self.config.hide_after_copy {
-                    self.hide_to_tray(ctx, "已复制");
+                    self.hide_to_tray(ctx, i18n::copied(self.config.language));
                 }
             }
             Err(error) => {
-                self.status_message = format!("写入剪贴板失败: {error}");
+                self.status_message = i18n::clipboard_write_failed(self.config.language, &error);
             }
         }
     }
 
     pub(crate) fn open_url_entry(&mut self, entry: &ClipboardEntry) {
-        match open_url(&entry.content) {
+        match open_url(&entry.content, self.config.language) {
             Ok(()) => {
-                self.status_message = String::from("已打开网址");
+                self.status_message = i18n::url_opened(self.config.language).to_owned();
             }
             Err(error) => {
-                self.status_message = format!("打开网址失败: {error}");
+                self.status_message = i18n::url_open_failed(self.config.language, &error);
             }
         }
     }
@@ -181,7 +183,7 @@ impl EcpClipboardApp {
             ) {
                 Ok(()) => changed = true,
                 Err(error) => {
-                    self.status_message = format!("写入数据库失败: {error}");
+                    self.status_message = i18n::database_write_failed(self.config.language, &error);
                 }
             }
         }
@@ -198,15 +200,15 @@ impl EcpClipboardApp {
                 Ok(()) => {
                     self.config.start_on_boot = result.enabled;
                     self.status_message = if result.enabled {
-                        String::from("已启用开机自启")
+                        i18n::startup_enabled(self.config.language).to_owned()
                     } else {
-                        String::from("已关闭开机自启")
+                        i18n::startup_disabled(self.config.language).to_owned()
                     };
                     self.save_config();
                 }
                 Err(error) => {
                     self.config.start_on_boot = !result.enabled;
-                    self.status_message = format!("开机自启设置失败: {error}");
+                    self.status_message = i18n::startup_failed(self.config.language, &error);
                 }
             }
         }
@@ -215,9 +217,9 @@ impl EcpClipboardApp {
     pub(crate) fn set_startup_async(&mut self, enabled: bool) {
         self.startup_pending = Some(enabled);
         self.status_message = if enabled {
-            String::from("正在启用开机自启...")
+            i18n::startup_enabling(self.config.language).to_owned()
         } else {
-            String::from("正在关闭开机自启...")
+            i18n::startup_disabling(self.config.language).to_owned()
         };
         let startup_tx = self.startup_tx.clone();
         thread::spawn(move || {
@@ -234,11 +236,15 @@ impl EcpClipboardApp {
         let viewport = ctx.input(|input| input.viewport().clone());
         if viewport.close_requested() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.hide_to_tray(ctx, "已隐藏到托盘");
+            self.hide_to_tray(ctx, i18n::hidden_to_tray(self.config.language));
         } else if viewport.minimized == Some(true) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            self.hide_to_tray(ctx, "已最小化到托盘");
+            self.hide_to_tray(ctx, i18n::minimized_to_tray(self.config.language));
         }
+    }
+
+    pub(crate) fn language(&self) -> Language {
+        self.config.language
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context, message: &str) {
@@ -409,13 +415,13 @@ fn hide_native_window(_window_handle: &Arc<AtomicIsize>) -> bool {
     false
 }
 
-fn open_url(content: &str) -> Result<(), String> {
+fn open_url(content: &str, language: Language) -> Result<(), String> {
     let url = content.trim();
     let lower = url.to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://"))
         || url.chars().any(char::is_whitespace)
     {
-        return Err(String::from("不是有效的 http/https 网址"));
+        return Err(i18n::invalid_url(language).to_owned());
     }
 
     #[cfg(target_os = "windows")]
@@ -427,8 +433,8 @@ fn open_url(content: &str) -> Result<(), String> {
 
     match status {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("打开命令返回失败状态: {status}")),
-        Err(error) => Err(format!("无法调用系统浏览器: {error}")),
+        Ok(status) => Err(i18n::browser_command_failed(language, &status)),
+        Err(error) => Err(i18n::browser_unavailable(language, &error)),
     }
 }
 

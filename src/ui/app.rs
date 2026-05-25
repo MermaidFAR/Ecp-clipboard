@@ -1,18 +1,20 @@
 use chrono::{Local, TimeZone};
-use eframe::egui::{self, Align, DragValue, Layout, RichText, TextEdit};
+use eframe::egui::{self, Align, ComboBox, DragValue, Layout, RichText, TextEdit};
 
+use crate::config::Language;
 use crate::db::{ClipboardEntry, EntryKind};
 
-use super::{EcpClipboardApp, KindFilter, theme, widgets};
+use super::{EcpClipboardApp, KindFilter, i18n, theme, widgets};
 
 impl EcpClipboardApp {
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
+        let language = self.language();
         egui::TopBottomPanel::top("search_panel").show(ctx, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.heading("剪贴板");
+                ui.heading(i18n::app_title(language));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("设置").clicked() {
+                    if ui.button(i18n::settings(language)).clicked() {
                         self.show_settings = !self.show_settings;
                     }
                     ui.label(RichText::new(&self.status_message).small());
@@ -22,7 +24,7 @@ impl EcpClipboardApp {
 
             let response = ui.add(
                 TextEdit::singleline(&mut self.search_query)
-                    .hint_text("搜索剪贴板历史")
+                    .hint_text(i18n::search_hint(language))
                     .desired_width(f32::INFINITY),
             );
             if response.changed() {
@@ -30,11 +32,11 @@ impl EcpClipboardApp {
             }
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                filter_button(ui, &mut self.kind_filter, KindFilter::All, "全部");
-                filter_button(ui, &mut self.kind_filter, KindFilter::Text, "文本");
-                filter_button(ui, &mut self.kind_filter, KindFilter::Url, "网址");
-                filter_button(ui, &mut self.kind_filter, KindFilter::FilePaths, "文件");
-                filter_button(ui, &mut self.kind_filter, KindFilter::Image, "图片");
+                filter_button(ui, &mut self.kind_filter, KindFilter::All, language);
+                filter_button(ui, &mut self.kind_filter, KindFilter::Text, language);
+                filter_button(ui, &mut self.kind_filter, KindFilter::Url, language);
+                filter_button(ui, &mut self.kind_filter, KindFilter::FilePaths, language);
+                filter_button(ui, &mut self.kind_filter, KindFilter::Image, language);
             });
             if ui.input(|input| input.pointer.any_released()) {
                 self.refresh_history();
@@ -47,36 +49,70 @@ impl EcpClipboardApp {
                 .resizable(false)
                 .default_width(220.0)
                 .show(ctx, |ui| {
-                    ui.heading("设置");
+                    ui.heading(i18n::settings(language));
                     ui.add_space(8.0);
 
                     let mut changed = false;
+                    ui.horizontal(|ui| {
+                        ui.label(i18n::language_label(language));
+                        ComboBox::from_id_salt("language_selector")
+                            .selected_text(i18n::language_name(self.config.language))
+                            .show_ui(ui, |ui| {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut self.config.language,
+                                        Language::ZhCn,
+                                        i18n::language_name(Language::ZhCn),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut self.config.language,
+                                        Language::En,
+                                        i18n::language_name(Language::En),
+                                    )
+                                    .changed();
+                            });
+                    });
                     changed |= ui
-                        .checkbox(&mut self.config.hide_after_copy, "复制后隐藏窗口")
+                        .checkbox(
+                            &mut self.config.hide_after_copy,
+                            i18n::hide_after_copy(language),
+                        )
                         .changed();
                     changed |= ui
-                        .checkbox(&mut self.config.hide_to_tray_on_close, "关闭/最小化到托盘")
+                        .checkbox(
+                            &mut self.config.hide_to_tray_on_close,
+                            i18n::hide_to_tray_on_close(language),
+                        )
                         .changed();
                     let dark_changed = ui
-                        .checkbox(&mut self.config.dark_mode, "深色主题")
+                        .checkbox(&mut self.config.dark_mode, i18n::dark_mode(language))
                         .changed();
                     changed |= dark_changed;
                     let win_v_changed = ui
-                        .checkbox(&mut self.config.use_win_v_hotkey, "尝试用 Win+V 呼出")
+                        .checkbox(
+                            &mut self.config.use_win_v_hotkey,
+                            i18n::win_v_hotkey(language),
+                        )
                         .changed();
                     if win_v_changed {
                         changed = true;
-                        self.status_message = String::from("Win+V 设置重启后生效");
+                        self.status_message =
+                            i18n::win_v_restart_required(self.config.language).to_owned();
                     }
                     let start_on_boot_changed = ui
                         .add_enabled(
                             self.startup_pending.is_none(),
-                            egui::Checkbox::new(&mut self.config.start_on_boot, "开机自启"),
+                            egui::Checkbox::new(
+                                &mut self.config.start_on_boot,
+                                i18n::start_on_boot(language),
+                            ),
                         )
                         .changed();
 
                     ui.horizontal(|ui| {
-                        ui.label("最大历史数");
+                        ui.label(i18n::max_history(language));
                         changed |= ui
                             .add(DragValue::new(&mut self.config.max_history).range(20..=2000))
                             .changed();
@@ -104,14 +140,15 @@ impl EcpClipboardApp {
                     if self.history.is_empty() {
                         ui.vertical_centered(|ui| {
                             ui.add_space(96.0);
-                            ui.label(RichText::new("暂无剪贴板历史").strong());
-                            ui.label("复制文本、文件或图片后会显示在这里。");
+                            ui.label(RichText::new(i18n::empty_title(language)).strong());
+                            ui.label(i18n::empty_body(language));
                         });
                         return;
                     }
 
                     for entry in self.history.clone() {
-                        let response = widgets::history_card(ui, &entry, format_timestamp(&entry));
+                        let response =
+                            widgets::history_card(ui, &entry, format_timestamp(&entry), language);
                         if response.clicked() {
                             if entry.kind == EntryKind::Url {
                                 self.open_url_entry(&entry);
@@ -121,14 +158,14 @@ impl EcpClipboardApp {
                         } else if response.secondary_clicked() {
                             match self.database.delete_entry(entry.id) {
                                 Ok(true) => {
-                                    self.status_message = String::from("已删除");
+                                    self.status_message = i18n::deleted(language).to_owned();
                                     self.refresh_history();
                                 }
                                 Ok(false) => {
-                                    self.status_message = String::from("记录已不存在");
+                                    self.status_message = i18n::entry_missing(language).to_owned();
                                 }
                                 Err(error) => {
-                                    self.status_message = format!("删除失败: {error}");
+                                    self.status_message = i18n::delete_failed(language, &error);
                                 }
                             }
                         }
@@ -139,9 +176,17 @@ impl EcpClipboardApp {
     }
 }
 
-fn filter_button(ui: &mut egui::Ui, filter: &mut KindFilter, value: KindFilter, label: &str) {
+fn filter_button(
+    ui: &mut egui::Ui,
+    filter: &mut KindFilter,
+    value: KindFilter,
+    language: Language,
+) {
     let selected = *filter == value;
-    if ui.selectable_label(selected, label).clicked() {
+    if ui
+        .selectable_label(selected, i18n::filter_label(language, value))
+        .clicked()
+    {
         *filter = value;
     }
 }

@@ -6,6 +6,19 @@ use std::time::Duration;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    ZhCn,
+    En,
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::ZhCn
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -16,6 +29,7 @@ pub struct AppConfig {
     pub dark_mode: bool,
     pub start_on_boot: bool,
     pub use_win_v_hotkey: bool,
+    pub language: Language,
 }
 
 impl Default for AppConfig {
@@ -28,6 +42,7 @@ impl Default for AppConfig {
             dark_mode: true,
             start_on_boot: false,
             use_win_v_hotkey: false,
+            language: Language::ZhCn,
         }
     }
 }
