@@ -19,11 +19,6 @@ use crate::clipboard::ClipboardEvent;
 use crate::config::AppConfig;
 use crate::db::{ClipboardEntry, Database, EntryKind};
 
-#[derive(Clone, Debug)]
-pub enum UiCommand {
-    Toggle,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KindFilter {
     All,
@@ -53,7 +48,6 @@ pub(crate) struct StartupResult {
 pub struct EcpClipboardApp {
     pub(crate) database: Database,
     pub(crate) clipboard_rx: Receiver<ClipboardEvent>,
-    pub(crate) command_rx: Receiver<UiCommand>,
     pub(crate) window_handle: Arc<AtomicIsize>,
     pub(crate) startup_tx: Sender<StartupResult>,
     pub(crate) startup_rx: Receiver<StartupResult>,
@@ -65,6 +59,7 @@ pub struct EcpClipboardApp {
     pub(crate) startup_pending: Option<bool>,
     pub(crate) status_message: String,
     pub(crate) visible: bool,
+    pub(crate) release_on_hide: bool,
 }
 
 impl EcpClipboardApp {
@@ -72,9 +67,9 @@ impl EcpClipboardApp {
         cc: &eframe::CreationContext<'_>,
         database: Database,
         clipboard_rx: Receiver<ClipboardEvent>,
-        command_rx: Receiver<UiCommand>,
         window_handle: Arc<AtomicIsize>,
         config: AppConfig,
+        release_on_hide: bool,
     ) -> Self {
         theme::install(&cc.egui_ctx, config.dark_mode);
         let (startup_tx, startup_rx) = mpsc::channel();
@@ -82,7 +77,6 @@ impl EcpClipboardApp {
         let mut app = Self {
             database,
             clipboard_rx,
-            command_rx,
             window_handle,
             startup_tx,
             startup_rx,
@@ -94,6 +88,7 @@ impl EcpClipboardApp {
             startup_pending: None,
             status_message: String::from("就绪"),
             visible: true,
+            release_on_hide,
         };
         app.refresh_history();
         app
@@ -145,8 +140,7 @@ impl EcpClipboardApp {
             Ok(()) => {
                 self.status_message = String::from("已复制");
                 if self.config.hide_after_copy {
-                    self.visible = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    self.hide_to_tray(ctx, "已复制");
                 }
             }
             Err(error) => {
@@ -194,23 +188,6 @@ impl EcpClipboardApp {
 
         if changed {
             self.refresh_history();
-        }
-    }
-
-    fn handle_commands(&mut self, ctx: &egui::Context) {
-        while let Ok(command) = self.command_rx.try_recv() {
-            match command {
-                UiCommand::Toggle => {
-                    self.visible = !self.visible;
-                    if self.visible {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    } else {
-                        self.hide_to_tray(ctx, "已隐藏到托盘");
-                    }
-                }
-            }
         }
     }
 
@@ -265,6 +242,9 @@ impl EcpClipboardApp {
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context, message: &str) {
+        if self.release_on_hide {
+            std::process::exit(0);
+        }
         self.visible = false;
         if !hide_native_window(&self.window_handle) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -278,8 +258,12 @@ impl EcpClipboardApp {
         };
         if let RawWindowHandle::Win32(handle) = handle.as_raw() {
             let hwnd = handle.hwnd.get();
+            let previous = self.window_handle.load(Ordering::Relaxed);
             self.window_handle.store(hwnd, Ordering::Relaxed);
             crate::NATIVE_WINDOW_HANDLE.store(hwnd, Ordering::Relaxed);
+            if self.release_on_hide && previous != hwnd {
+                focus_native_window(hwnd);
+            }
         }
     }
 }
@@ -364,6 +348,46 @@ fn hide_current_process_windows() {
 }
 
 #[cfg(target_os = "windows")]
+fn focus_native_window(hwnd_value: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        SetForegroundWindow, SetWindowPos,
+    };
+
+    if hwnd_value == 0 {
+        return;
+    }
+
+    unsafe {
+        let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        let _ = SetForegroundWindow(hwnd);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_NOTOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn focus_native_window(_hwnd_value: isize) {}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn hide_process_window_proc(
     hwnd: windows::Win32::Foundation::HWND,
     lparam: windows::Win32::Foundation::LPARAM,
@@ -412,7 +436,6 @@ impl eframe::App for EcpClipboardApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.capture_window_handle(frame);
         self.handle_clipboard_events();
-        self.handle_commands(ctx);
         self.handle_startup_results();
         self.handle_viewport_lifecycle(ctx);
 

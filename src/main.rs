@@ -7,40 +7,51 @@ mod startup;
 mod ui;
 mod win_v_takeover;
 
+use std::env;
 use std::error::Error;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicIsize, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicIsize};
 use std::thread;
 
 use eframe::egui;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
-use ui::{EcpClipboardApp, UiCommand};
+use ui::EcpClipboardApp;
 
 #[cfg(target_os = "windows")]
 pub(crate) static NATIVE_WINDOW_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config::AppConfig::load()?;
-    let db = db::Database::open(&config.database_path()?)?;
     if let Err(error) = win_v_takeover::configure(config.use_win_v_hotkey) {
         eprintln!("failed to configure Win+V takeover: {error}");
     }
 
+    if env::args().any(|arg| arg == "--gui") {
+        run_gui(config)
+    } else {
+        run_background(config)
+    }
+}
+
+fn run_background(config: config::AppConfig) -> Result<(), Box<dyn Error>> {
     let (clipboard_tx, clipboard_rx) = mpsc::channel();
-    let (command_tx, command_rx) = mpsc::channel();
-    let window_handle = Arc::new(AtomicIsize::new(0));
+    let database_path = config.database_path()?;
 
     let _clipboard_thread = clipboard::spawn_watcher(clipboard_tx, config.poll_interval());
-    let _hotkey_thread = spawn_hotkey_listener(
-        command_tx.clone(),
-        window_handle.clone(),
-        config.use_win_v_hotkey,
-    );
-    let _tray_icon = create_tray(command_tx.clone(), window_handle.clone())?;
+    let _database_thread = spawn_database_writer(database_path, clipboard_rx);
+    let _hotkey_thread = spawn_hotkey_listener(config.use_win_v_hotkey);
+    let _tray_icon = create_tray()?;
+
+    run_background_event_loop()
+}
+
+fn run_gui(config: config::AppConfig) -> Result<(), Box<dyn Error>> {
+    let db = db::Database::open(&config.database_path()?)?;
+    let (_clipboard_tx, clipboard_rx) = mpsc::channel();
+    let window_handle = Arc::new(AtomicIsize::new(0));
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -59,9 +70,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 cc,
                 db,
                 clipboard_rx,
-                command_rx,
                 window_handle,
                 config,
+                true,
             )))
         }),
     )?;
@@ -69,10 +80,43 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn create_tray(
-    command_tx: mpsc::Sender<UiCommand>,
-    window_handle: Arc<AtomicIsize>,
-) -> Result<TrayIcon, Box<dyn Error>> {
+fn spawn_database_writer(
+    database_path: PathBuf,
+    clipboard_rx: mpsc::Receiver<clipboard::ClipboardEvent>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let database = match db::Database::open(&database_path) {
+            Ok(database) => database,
+            Err(error) => {
+                eprintln!("failed to open clipboard database: {error}");
+                return;
+            }
+        };
+
+        while let Ok(event) = clipboard_rx.recv() {
+            let clipboard::ClipboardEvent::Item {
+                kind,
+                content,
+                hash,
+                image_width,
+                image_height,
+                image_rgba,
+            } = event;
+            if let Err(error) = database.insert_entry(
+                kind,
+                &content,
+                &hash,
+                image_width,
+                image_height,
+                image_rgba.as_deref(),
+            ) {
+                eprintln!("failed to write clipboard history: {error}");
+            }
+        }
+    })
+}
+
+fn create_tray() -> Result<TrayIcon, Box<dyn Error>> {
     let menu = Menu::new();
     let show_item = MenuItem::new("显示 / 隐藏", true, None);
     let exit_item = MenuItem::new("退出", true, None);
@@ -92,9 +136,7 @@ fn create_tray(
         let receiver = MenuEvent::receiver();
         while let Ok(event) = receiver.recv() {
             if event.id == show_id {
-                if !toggle_native_window(&window_handle) {
-                    let _ = command_tx.send(UiCommand::Toggle);
-                }
+                toggle_gui_process();
             } else if event.id == exit_id {
                 std::process::exit(0);
             }
@@ -125,11 +167,7 @@ fn create_icon() -> Result<Icon, Box<dyn Error>> {
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_hotkey_listener(
-    command_tx: mpsc::Sender<UiCommand>,
-    window_handle: Arc<AtomicIsize>,
-    use_win_v_hotkey: bool,
-) -> thread::JoinHandle<()> {
+fn spawn_hotkey_listener(use_win_v_hotkey: bool) -> thread::JoinHandle<()> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         MOD_ALT, MOD_CONTROL, MOD_WIN, RegisterHotKey, VK_V,
     };
@@ -169,9 +207,7 @@ fn spawn_hotkey_listener(
             let hotkey_id = message.wParam.0 as i32;
             if message.message == WM_HOTKEY && (hotkey_id == CTRL_ALT_V_ID || hotkey_id == WIN_V_ID)
             {
-                if !toggle_native_window(&window_handle) {
-                    let _ = command_tx.send(UiCommand::Toggle);
-                }
+                toggle_gui_process();
             }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -180,66 +216,73 @@ fn spawn_hotkey_listener(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn spawn_hotkey_listener(
-    command_tx: mpsc::Sender<UiCommand>,
-    _window_handle: Arc<AtomicIsize>,
-    _use_win_v_hotkey: bool,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let _ = command_tx;
-    })
+fn spawn_hotkey_listener(_use_win_v_hotkey: bool) -> thread::JoinHandle<()> {
+    thread::spawn(move || {})
 }
 
 #[cfg(target_os = "windows")]
-fn toggle_native_window(window_handle: &Arc<AtomicIsize>) -> bool {
-    toggle_hwnd_value(window_handle.load(Ordering::Relaxed))
-}
-
-#[cfg(target_os = "windows")]
-fn toggle_hwnd_value(hwnd_value: isize) -> bool {
-    use windows::Win32::Foundation::HWND;
+fn run_background_event_loop() -> Result<(), Box<dyn Error>> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, SW_HIDE,
-        SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos,
-        ShowWindow,
+        DispatchMessageW, GetMessageW, MSG, TranslateMessage,
     };
 
-    if hwnd_value == 0 {
-        return false;
-    }
-
     unsafe {
-        let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
-        if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-        } else {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-            );
-            let _ = SetForegroundWindow(hwnd);
-            let _ = BringWindowToTop(hwnd);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_NOTOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-            );
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
     }
-    true
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn toggle_native_window(_window_handle: &Arc<AtomicIsize>) -> bool {
+fn run_background_event_loop() -> Result<(), Box<dyn Error>> {
+    loop {
+        thread::park();
+    }
+}
+
+fn toggle_gui_process() {
+    if close_existing_gui_window() {
+        return;
+    }
+
+    match env::current_exe() {
+        Ok(exe) => {
+            if let Err(error) = Command::new(exe).arg("--gui").spawn() {
+                eprintln!("failed to start GUI process: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("failed to resolve current executable: {error}");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn close_existing_gui_window() -> bool {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
+    use windows::core::PCWSTR;
+
+    let title = "Ecp Clipboard"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    unsafe {
+        match FindWindowW(None, PCWSTR(title.as_ptr())) {
+            Ok(hwnd) => {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn close_existing_gui_window() -> bool {
     false
 }
