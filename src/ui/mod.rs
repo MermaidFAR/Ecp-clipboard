@@ -3,11 +3,16 @@ mod theme;
 mod widgets;
 
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicIsize, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
 use arboard::{Clipboard, ImageData};
 use eframe::egui;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::clipboard::ClipboardEvent;
 use crate::config::AppConfig;
@@ -16,8 +21,6 @@ use crate::db::{ClipboardEntry, Database, EntryKind};
 #[derive(Clone, Debug)]
 pub enum UiCommand {
     Toggle,
-    Status(String),
-    Exit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +51,7 @@ pub struct EcpClipboardApp {
     pub(crate) database: Database,
     pub(crate) clipboard_rx: Receiver<ClipboardEvent>,
     pub(crate) command_rx: Receiver<UiCommand>,
+    pub(crate) window_handle: Arc<AtomicIsize>,
     pub(crate) startup_tx: Sender<StartupResult>,
     pub(crate) startup_rx: Receiver<StartupResult>,
     pub(crate) config: AppConfig,
@@ -66,6 +70,7 @@ impl EcpClipboardApp {
         database: Database,
         clipboard_rx: Receiver<ClipboardEvent>,
         command_rx: Receiver<UiCommand>,
+        window_handle: Arc<AtomicIsize>,
         config: AppConfig,
     ) -> Self {
         theme::install(&cc.egui_ctx, config.dark_mode);
@@ -75,6 +80,7 @@ impl EcpClipboardApp {
             database,
             clipboard_rx,
             command_rx,
+            window_handle,
             startup_tx,
             startup_rx,
             config,
@@ -180,16 +186,13 @@ impl EcpClipboardApp {
             match command {
                 UiCommand::Toggle => {
                     self.visible = !self.visible;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.visible));
                     if self.visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                     }
-                }
-                UiCommand::Status(message) => {
-                    self.status_message = message;
-                }
-                UiCommand::Exit => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         }
@@ -248,6 +251,20 @@ impl EcpClipboardApp {
             self.status_message = String::from("已最小化到托盘");
         }
     }
+
+    fn capture_window_handle(&self, frame: &eframe::Frame) {
+        if self.window_handle.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+
+        let Ok(handle) = frame.window_handle() else {
+            return;
+        };
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+            self.window_handle
+                .store(handle.hwnd.get(), Ordering::Relaxed);
+        }
+    }
 }
 
 fn copy_image(entry: &ClipboardEntry) -> Result<(), arboard::Error> {
@@ -293,7 +310,8 @@ fn copy_file_paths(content: &str) -> Result<(), arboard::Error> {
 }
 
 impl eframe::App for EcpClipboardApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.capture_window_handle(frame);
         self.handle_clipboard_events();
         self.handle_commands(ctx);
         self.handle_startup_results();

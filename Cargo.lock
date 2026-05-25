@@ -958,6 +958,7 @@ dependencies = [
  "eframe",
  "egui",
  "image",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",
