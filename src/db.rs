@@ -133,6 +133,13 @@ impl Database {
         rows.collect()
     }
 
+    pub fn delete_all(&self) -> Result<usize> {
+        let changed = self
+            .connection
+            .execute("DELETE FROM clipboard_history", [])?;
+        Ok(changed)
+    }
+
     pub fn delete_entry(&self, id: i64) -> Result<bool> {
         let changed = self
             .connection
