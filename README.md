@@ -65,6 +65,36 @@ The memory model is intentional: the background process never initializes eframe
 
 ---
 
+## CLI & AI Integration
+
+A standalone CLI binary (`ecp.exe`) gives AI tools and scripts direct access to your clipboard history — no GUI required.
+
+| Command | Action | AI Use Case |
+| :--- | :--- | :--- |
+| `ecp list [N]` | Show recent history | AI reads what you last copied for context |
+| `ecp paste <N>` | Copy entry back to clipboard | AI writes a result for you to paste anywhere |
+| `ecp search <kw>` | Full-text search history | AI searches past snippets to answer questions |
+| `ecp clear` | Delete all history | AI cleans up after a session |
+
+**Why AI tools love it:**
+
+- **Zero GUI overhead**: the `ecp.exe` binary is ~1.85 MB, links no graphics stack, and runs in milliseconds.
+- **Plain-text output**: every command outputs clean, parseable text — ready for any LLM, script, or terminal pipeline.
+- **Local-first**: clipboard data never leaves your machine; the AI only reads what you explicitly command.
+- **Session context**: combine `ecp list` and `ecp paste` to let the AI understand what you're working on without manual copy-paste.
+
+### Example: let AI find and paste a snippet
+
+```powershell
+# The AI runs these on your behalf:
+ecp search "API key setup"
+# >   1  [TEXT     ]  const apiKey = process.env.MARINA_API_KEY;
+ecp paste 1
+# > copied: const apiKey = process.env.MARINA_API_KEY;
+```
+
+---
+
 ## Installation & Usage
 
 ### Build from source

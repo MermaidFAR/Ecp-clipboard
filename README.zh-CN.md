@@ -65,6 +65,36 @@
 
 ---
 
+## CLI 与 AI 协作
+
+独立的 CLI 程序（`ecp.exe`）让 AI 工具和脚本直接访问剪贴板历史——无需启动 GUI。
+
+| 命令 | 操作 | AI 使用场景 |
+| :--- | :--- | :--- |
+| `ecp list [N]` | 显示最近历史 | AI 读取你最近复制的上下文 |
+| `ecp paste <N>` | 复制条目回剪贴板 | AI 写入结果供你任意粘贴 |
+| `ecp search <kw>` | 全文搜索历史 | AI 搜索历史片段来回答问题 |
+| `ecp clear` | 清空所有历史 | AI 在会话结束后清理数据 |
+
+**为什么 AI 工具喜欢它：**
+
+- **零 GUI 开销**：`ecp.exe` 仅约 1.85 MB，不链接图形栈，毫秒级启动。
+- **纯文本输出**：每条命令输出干净、可解析的文本——适合任何 LLM、脚本或终端管道。
+- **完全本地**：剪贴板数据不会离开本机；AI 只读取你明确指令的内容。
+- **会话上下文**：配合 `ecp list` 和 `ecp paste`，让 AI 无需手动复制粘贴即可理解你的工作上下文。
+
+### 示例：让 AI 查找并粘贴代码片段
+
+```powershell
+# AI 代替你执行：
+ecp search "API key 配置"
+# >   1  [TEXT     ]  const apiKey = process.env.MARINA_API_KEY;
+ecp paste 1
+# > 已复制: const apiKey = process.env.MARINA_API_KEY;
+```
+
+---
+
 ## 安装与使用
 
 ### 从源码构建
