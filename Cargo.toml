@@ -2,6 +2,10 @@
 name = "ecp-clipboard"
 version = "0.1.0"
 edition = "2024"
+description = "A lightweight, local-first clipboard manager for Windows"
+repository = "https://github.com/MermaidFAR/Ecp-clipboard"
+license = "MIT"
+authors = ["MermaidFAR <MermaidFAR@users.noreply.github.com>"]
 
 [[bin]]
 name = "ecp-clipboard"
