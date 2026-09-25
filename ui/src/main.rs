@@ -60,6 +60,7 @@ struct ClipboardWindow {
     query: String,
     input: Entity<SearchInput>,
     _input_subscription: Subscription,
+    _activation_subscription: Subscription,
     filter: Filter,
     status: String,
     hotkey_status: String,
@@ -572,6 +573,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 this.refresh();
                                 cx.notify();
                             });
+                        let activation_subscription =
+                            cx.observe_window_activation(window, |_, window, _| {
+                                if !window.is_window_active() {
+                                    window.remove_window();
+                                }
+                            });
                         window.focus(&input.focus_handle(cx), cx);
                         ClipboardWindow {
                             config,
@@ -580,6 +587,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             filtered: Vec::new(),
                             input,
                             _input_subscription: subscription,
+                            _activation_subscription: activation_subscription,
                             query: String::new(),
                             filter: Filter::All,
                             status: "正在加载历史…".into(),
@@ -592,6 +600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .expect("failed to create clipboard window");
         trace_startup(startup_trace.as_deref(), start, "window_open");
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
         let history_trace = startup_trace.clone();
         cx.spawn(async move |cx| {

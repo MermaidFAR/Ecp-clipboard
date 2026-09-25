@@ -208,9 +208,9 @@ fn create_icon() -> Result<Icon, Box<dyn Error>> {
     Ok(Icon::from_rgba(rgba, 16, 16)?)
 }
 
-fn launch_gui() {
+fn toggle_gui() {
     #[cfg(windows)]
-    if ipc::signal(Signal::Show) {
+    if ipc::signal(Signal::Hide) {
         return;
     }
     let result = env::current_exe().map(|mut path| {
@@ -391,14 +391,11 @@ fn run_windows_event_loop(config: AppConfig) -> Result<(), Box<dyn Error>> {
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
             if message.message == WM_CLIPBOARDUPDATE {
                 let _ = notify_tx.send(());
-            } else if message.message == WM_HOTKEY
-                && (message.wParam.0 as i32 == CTRL_ALT_V || message.wParam.0 as i32 == WIN_V)
+            } else if (message.message == WM_HOTKEY
+                && (message.wParam.0 as i32 == CTRL_ALT_V || message.wParam.0 as i32 == WIN_V))
+                || message.message == TRAY_TOGGLE
             {
-                launch_gui();
-            } else if message.message == TRAY_TOGGLE {
-                if !ipc::signal(Signal::Hide) {
-                    launch_gui();
-                }
+                toggle_gui();
             } else if message.message == SETTINGS_RELOAD {
                 let updated_config = AppConfig::load();
                 if let Ok(updated) = &updated_config {

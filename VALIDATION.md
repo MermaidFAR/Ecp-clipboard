@@ -18,6 +18,8 @@
 
 这些是当前配置下的一次实际运行检查，不能代替下面的隔离失败注入测试或延迟统计。随后用户主动清空了当前历史库，程序按其选择保留空库；完整备份未删除。清空后执行 SQLite `VACUUM` 和 WAL 截断，活动数据库缩至 20,480 字节，`quick_check=ok`。旧版曾把 `EnableClipboardHistory` 和 `EnableCloudClipboard` 设为 0；由于旧版没有保存两者原值，本次没有推测或更改它们。
 
+交互修复后，安装版连续触发两次 Win+V：第一次出现 `ecp-ui.exe`，第二次该进程退出，后台保持运行。另在隔离配置下启动窗口并发送 Alt+Tab：前台焦点转到其他程序后，GPUI 窗口进程退出。修复版重新构建并安装，热键状态仍显示“Win+V 已接管；Ctrl+Alt+V 可用”。
+
 ## 界面启动基准
 
 测试机器：Windows 11 专业版 10.0.26200，AMD Ryzen AI 9 HX 370，Rust 1.95.0。`cargo run -p ecp-clipboard --release --example bench_ui -- <dataset> 10` 为每组创建独立临时数据库并启动十次 `ecp-ui.exe`。时间从创建进程到首屏历史加载完成并绘制下一帧的标记；第一轮单列，余下九轮取 p50/p95。峰值工作集由 Windows `GetProcessMemoryInfo` 读取；表中为该组观测到的约数。图片样本是 256×256 的独立 RGBA 像素。测量未触发实际热键，故是“启动到可操作”的代理数据，实际热键延迟仍待测。第一轮只是该数据集的首次运行，**不是清空系统缓存后的真正冷启**。

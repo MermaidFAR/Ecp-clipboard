@@ -16,7 +16,7 @@ Build all three with `cargo build --workspace --release --locked`. The backgroun
 
 ## Usage
 
-Start `ecp-clipboard.exe` and press **Ctrl+Alt+V** or use the tray. The compact window supports search, type filters, copy, delete, and clear. A URL row copies the URL; its separate **Open webpage** button opens the browser. An image row copies the stored original image. `Win+V` takeover is off by default and must be enabled in the window. Its status is shown in the footer; registration failure leaves Ctrl+Alt+V available when that hotkey registered successfully.
+Start `ecp-clipboard.exe` and press **Ctrl+Alt+V** or use the tray. Press the popup hotkey again to close the window; switching to another window also closes it. The compact window supports search, type filters, copy, delete, and clear. A URL row copies the URL; its separate **Open webpage** button opens the browser. An image row copies the stored original image. `Win+V` takeover is off by default and must be enabled in the window. Once enabled, it also toggles the popup. Its status is shown in the footer; registration failure leaves Ctrl+Alt+V available when that hotkey registered successfully.
 
 ```powershell
 ecp list 20
