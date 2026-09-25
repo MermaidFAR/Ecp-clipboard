@@ -1,11 +1,14 @@
 use std::error::Error;
 
+use crate::clipboard_write::copy_entry;
 use crate::config::AppConfig;
 use crate::db::{Database, EntryKind};
 
+#[derive(Debug, PartialEq)]
 pub enum CliCommand {
     List { limit: usize },
     Paste { index: usize },
+    PasteId { id: i64 },
     Search { query: String },
     Clear,
 }
@@ -13,7 +16,11 @@ pub enum CliCommand {
 /// Parse CLI subcommands from process arguments.
 /// Returns `None` when no recognized CLI subcommand is present.
 pub fn parse() -> Option<CliCommand> {
-    let mut args = std::env::args().skip(1).peekable();
+    parse_args(std::env::args().skip(1))
+}
+
+pub fn parse_args(args: impl IntoIterator<Item = String>) -> Option<CliCommand> {
+    let mut args = args.into_iter().peekable();
 
     match args.next().as_deref()? {
         "list" => {
@@ -21,7 +28,12 @@ pub fn parse() -> Option<CliCommand> {
             Some(CliCommand::List { limit })
         }
         "paste" => {
-            let n: usize = args.next()?.parse().ok()?;
+            let first = args.next()?;
+            if first == "--id" {
+                let id = args.next()?.parse().ok()?;
+                return Some(CliCommand::PasteId { id });
+            }
+            let n: usize = first.parse().ok()?;
             if n == 0 {
                 return None;
             }
@@ -45,7 +57,7 @@ pub fn parse() -> Option<CliCommand> {
 /// No GUI, tray, or background threads are started.
 pub fn run(cmd: CliCommand, config: &AppConfig) -> Result<(), Box<dyn Error>> {
     let db_path = config.database_path()?;
-    let db = Database::open(&db_path)?;
+    let mut db = Database::open_with_limits(&db_path, config.max_history, config.max_image_bytes)?;
 
     match cmd {
         CliCommand::List { limit } => {
@@ -55,8 +67,9 @@ pub fn run(cmd: CliCommand, config: &AppConfig) -> Result<(), Box<dyn Error>> {
             } else {
                 for (i, entry) in entries.iter().enumerate() {
                     println!(
-                        "{:>3}  [{:<10}]  {}",
+                        "{:>3}  id={:<8}  [{:<10}]  {}",
                         i + 1,
+                        entry.id,
                         entry.kind.as_str(),
                         preview(&entry.content, entry.kind)
                     );
@@ -68,19 +81,19 @@ pub fn run(cmd: CliCommand, config: &AppConfig) -> Result<(), Box<dyn Error>> {
             let entries = db.list_recent(index + 1)?;
             match entries.into_iter().nth(index) {
                 None => {
-                    eprintln!("error: index out of range");
-                    std::process::exit(1);
+                    return Err("index out of range".into());
                 }
                 Some(entry) => {
-                    if entry.kind == EntryKind::Image {
-                        eprintln!("error: image entries cannot be pasted via CLI");
-                        std::process::exit(1);
-                    }
-                    let mut clipboard = arboard::Clipboard::new()?;
-                    clipboard.set_text(&entry.content)?;
-                    println!("copied: {}", preview(&entry.content, entry.kind));
+                    copy_entry(&db, &entry)?;
+                    println!("copied id={}", entry.id);
                 }
             }
+        }
+
+        CliCommand::PasteId { id } => {
+            let entry = db.get_by_id(id)?.ok_or("entry ID not found")?;
+            copy_entry(&db, &entry)?;
+            println!("copied id={}", entry.id);
         }
 
         CliCommand::Search { query } => {
@@ -88,10 +101,10 @@ pub fn run(cmd: CliCommand, config: &AppConfig) -> Result<(), Box<dyn Error>> {
             if entries.is_empty() {
                 println!("(no results)");
             } else {
-                for (i, entry) in entries.iter().enumerate() {
+                for entry in &entries {
                     println!(
-                        "{:>3}  [{:<10}]  {}",
-                        i + 1,
+                        "id={:<8}  [{:<10}]  {}",
+                        entry.id,
                         entry.kind.as_str(),
                         preview(&entry.content, entry.kind)
                     );
@@ -101,6 +114,8 @@ pub fn run(cmd: CliCommand, config: &AppConfig) -> Result<(), Box<dyn Error>> {
 
         CliCommand::Clear => {
             let count = db.delete_all()?;
+            #[cfg(windows)]
+            let _ = crate::ipc::signal(crate::ipc::Signal::History);
             println!("cleared {count} entries");
         }
     }
@@ -121,3 +136,19 @@ fn preview(content: &str, kind: EntryKind) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_id_paste_and_legacy_recent_index_parse() {
+        assert_eq!(
+            parse_args(["paste", "--id", "42"].map(str::to_owned)),
+            Some(CliCommand::PasteId { id: 42 })
+        );
+        assert_eq!(
+            parse_args(["paste", "2"].map(str::to_owned)),
+            Some(CliCommand::Paste { index: 1 })
+        );
+    }
+}

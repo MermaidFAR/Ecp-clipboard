@@ -6,10 +6,10 @@ const APP_NAME: &str = "Ecp Clipboard";
 
 #[cfg(target_os = "windows")]
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
-    let exe_path = env::current_exe()
-        .map_err(|error| format!("无法获取当前程序路径: {error}"))?
-        .display()
-        .to_string();
+    let mut exe_path =
+        env::current_exe().map_err(|error| format!("无法获取当前程序路径: {error}"))?;
+    exe_path.set_file_name("ecp-clipboard.exe");
+    let exe_path = exe_path.display().to_string();
 
     let status = if enabled {
         Command::new("reg")

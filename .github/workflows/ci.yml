@@ -18,6 +18,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -29,8 +31,23 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build
-        run: cargo build --release --verbose
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --workspace --locked
+
+      - name: Build three Windows programs
+        run: cargo build --workspace --release --locked
+
+      - name: Check packaged executables
+        shell: pwsh
+        run: |
+          foreach ($name in @('ecp-clipboard.exe', 'ecp-ui.exe', 'ecp.exe')) {
+            if (-not (Test-Path (Join-Path 'target/release' $name))) {
+              throw "Missing executable: $name"
+            }
+          }

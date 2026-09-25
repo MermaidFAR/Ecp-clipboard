@@ -1,11 +1,11 @@
-name: Release
+name: Release eligibility
 
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -16,12 +16,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        run: cargo build --release --verbose
+      - name: Inspect locked dependency licenses
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --format-version 1 | ConvertFrom-Json
+          $blocked = $metadata.packages | Where-Object {
+            -not $_.license -or ($_.license -match 'GPL' -and $_.license -notmatch ' OR ')
+          }
+          if ($blocked) {
+            $blocked | Select-Object name, version, license | Format-Table -AutoSize
+            throw 'A dependency requires license review before publication.'
+          }
+          Write-Host 'Automated scan passed. Manual license and notice review is still required.'
 
-      - name: Publish Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            target/release/ecp-clipboard.exe
-            target/release/ecp.exe
+      - name: Build release candidates locally in CI
+        run: cargo build --workspace --release --locked
