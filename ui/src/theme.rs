@@ -1,0 +1,11 @@
+pub const CANVAS: u32 = 0xf4f6fa;
+pub const SURFACE: u32 = 0xffffff;
+pub const INK: u32 = 0x1c2738;
+pub const MUTED: u32 = 0x687588;
+pub const FAINT: u32 = 0x98a3b3;
+pub const STROKE: u32 = 0xe2e8f0;
+pub const ACCENT: u32 = 0x365bd7;
+pub const ACCENT_SOFT: u32 = 0xeaf0ff;
+pub const GREEN: u32 = 0x26775b;
+pub const DANGER: u32 = 0xb54750;
+pub const DANGER_SOFT: u32 = 0xffedf0;

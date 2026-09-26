@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod theme;
 mod ui_input;
 
 use chrono::{DateTime, Local};
@@ -18,6 +19,7 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
+use theme as colors;
 use ui_input::SearchInput;
 
 fn trace_startup(path: Option<&std::path::Path>, start: Instant, phase: &str) {
@@ -269,64 +271,336 @@ impl ClipboardWindow {
 impl Render for ClipboardWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let filter_button = |name: &'static str, filter: Filter, cx: &mut Context<Self>| {
+            let selected = self.filter == filter;
             div()
                 .id(name)
-                .px_2()
+                .px_3()
                 .py_1()
                 .rounded_md()
-                .bg(if self.filter == filter {
-                    rgb(0x4263eb)
+                .border_1()
+                .border_color(rgb(if selected {
+                    colors::ACCENT_SOFT
                 } else {
-                    rgb(0x252d3d)
-                })
+                    colors::STROKE
+                }))
+                .bg(rgb(if selected {
+                    colors::ACCENT_SOFT
+                } else {
+                    colors::SURFACE
+                }))
+                .text_color(rgb(if selected {
+                    colors::ACCENT
+                } else {
+                    colors::MUTED
+                }))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.set_filter(filter, cx)))
                 .child(name)
+        };
+        let has_error = self.status.contains("失败") || self.status.contains("错误");
+        let hotkey_error = self.hotkey_status.contains("失败");
+        let hotkey_ready =
+            self.hotkey_status.contains("已接管") || self.hotkey_status.contains("可用");
+        let (empty_title, empty_hint) = if self.db.is_none() {
+            ("正在加载历史", "请稍候…")
+        } else if self.entries.is_empty() && self.query.is_empty() {
+            ("还没有剪贴板记录", "复制文字、图片或文件后，会出现在这里。")
+        } else {
+            ("没有匹配的记录", "试试其他搜索词或切换分类。")
         };
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x151923))
-            .text_color(rgb(0xe9edf7))
+            .bg(rgb(colors::CANVAS))
+            .text_color(rgb(colors::INK))
             .text_sm()
             .child(
                 div()
-                    .p_3()
+                    .px_4()
+                    .pt_3()
+                    .pb_3()
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap_3()
+                    .bg(rgb(colors::SURFACE))
+                    .border_b_1()
+                    .border_color(rgb(colors::STROKE))
                     .child(
                         div()
                             .flex()
+                            .items_center()
                             .justify_between()
-                            .child("ECP · 剪切板")
-                            .child(format!("{} 条", self.filtered.len()))
                             .child(
                                 div()
-                                    .id("clear")
-                                    .cursor_pointer()
-                                    .text_color(rgb(0xffa8a8))
-                                    .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
-                                    .child(if self.confirm_clear {
-                                        "确认清空"
-                                    } else {
-                                        "清空"
-                                    }),
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(px(34.))
+                                            .h(px(34.))
+                                            .rounded_md()
+                                            .bg(rgb(colors::ACCENT))
+                                            .text_color(rgb(colors::SURFACE))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(18.))
+                                            .child("E"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().text_size(px(17.)).child("剪贴板"))
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(colors::FAINT))
+                                                    .child("ECP  ·  CLIPBOARD"),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(rgb(colors::CANVAS))
+                                            .text_color(rgb(colors::MUTED))
+                                            .text_size(px(11.))
+                                            .child(format!("{} 条记录", self.filtered.len())),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("clear")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(rgb(colors::STROKE))
+                                            .bg(rgb(if self.confirm_clear {
+                                                colors::DANGER_SOFT
+                                            } else {
+                                                colors::SURFACE
+                                            }))
+                                            .text_color(rgb(colors::DANGER))
+                                            .text_size(px(11.))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
+                                            .child(if self.confirm_clear {
+                                                "确认清空"
+                                            } else {
+                                                "清空"
+                                            }),
+                                    ),
                             ),
                     )
+                    .child(self.input.clone())
                     .child(
                         div()
-                            .id("win-v")
-                            .cursor_pointer()
-                            .text_color(rgb(0xaebcfb))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_win_v(cx)))
-                            .child(if self.config.use_win_v_hotkey {
-                                "Win+V 已请求接管 · 点击关闭"
-                            } else {
-                                "启用 Win+V 接管（需明确开启）"
+                            .flex()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .child(filter_button("全部", Filter::All, cx))
+                            .child(filter_button("文字", Filter::Text, cx))
+                            .child(filter_button("图片", Filter::Image, cx))
+                            .child(filter_button("文件", Filter::File, cx))
+                            .child(filter_button("网址", Filter::Url, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when(self.filtered.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .mt_4()
+                                .mx_3()
+                                .p_4()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(colors::STROKE))
+                                .bg(rgb(colors::SURFACE))
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(div().text_size(px(15.)).child(empty_title))
+                                .child(
+                                    div()
+                                        .text_color(rgb(colors::MUTED))
+                                        .text_size(px(12.))
+                                        .child(empty_hint),
+                                ),
+                        )
+                    })
+                    .child(
+                        uniform_list(
+                            "history",
+                            self.filtered.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .map(|index| {
+                                        let entry = this.filtered[index].clone();
+                                        let id = entry.id;
+                                        let (label, symbol, tile_color, tile_ink) = match entry.kind
+                                        {
+                                            EntryKind::Image => ("图片", "图", 0xf2eefe, 0x7957b8),
+                                            EntryKind::FilePaths => {
+                                                ("文件", "件", 0xe7f4ee, 0x26775b)
+                                            }
+                                            EntryKind::Url => ("网址", "链", 0xeaf0ff, 0x365bd7),
+                                            EntryKind::Text => ("文字", "文", 0xfff2e7, 0xb16a31),
+                                        };
+                                        let preview =
+                                            this.db.as_ref().and_then(|db| db.preview_path(&entry));
+                                        if let Some(path) = preview.as_ref()
+                                            && !this.preview_cache.contains(path)
+                                        {
+                                            this.preview_cache.push_back(path.clone());
+                                            while this.preview_cache.len() > 24 {
+                                                if let Some(evicted) =
+                                                    this.preview_cache.pop_front()
+                                                {
+                                                    cx.remove_asset::<ImgResourceLoader>(
+                                                        &evicted.into(),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        let mut headline = entry
+                                            .content
+                                            .lines()
+                                            .next()
+                                            .unwrap_or("")
+                                            .chars()
+                                            .take(90)
+                                            .collect::<String>();
+                                        if entry.legacy_preview {
+                                            headline = format!("旧记录仅缩略图 · {headline}");
+                                        }
+                                        let time = DateTime::from_timestamp(entry.updated_at, 0)
+                                            .map(|value| {
+                                                value
+                                                    .with_timezone(&Local)
+                                                    .format("%m-%d %H:%M")
+                                                    .to_string()
+                                            })
+                                            .unwrap_or_else(|| "?".into());
+                                        let mut row = div()
+                                            .id(index)
+                                            .w_full()
+                                            .h(px(82.))
+                                            .px_3()
+                                            .py_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .rounded_lg()
+                                            .border_1()
+                                            .border_color(rgb(colors::STROKE))
+                                            .bg(rgb(colors::SURFACE))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.copy(id, window, cx)
+                                            }));
+                                        let mut tile = div()
+                                            .w(px(46.))
+                                            .h(px(46.))
+                                            .rounded_md()
+                                            .bg(rgb(tile_color))
+                                            .text_color(rgb(tile_ink))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(15.));
+                                        if let Some(path) = preview {
+                                            tile = tile.child(img(path).w(px(42.)).h(px(42.)));
+                                        } else {
+                                            tile = tile.child(symbol);
+                                        }
+                                        row = row.child(tile).child(
+                                            div()
+                                                .flex_1()
+                                                .overflow_hidden()
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(colors::INK))
+                                                        .child(headline),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(colors::FAINT))
+                                                        .text_size(px(11.))
+                                                        .child(format!(
+                                                            "{}  ·  #{}  ·  {}",
+                                                            label, entry.id, time
+                                                        )),
+                                                ),
+                                        );
+                                        if entry.kind == EntryKind::Url {
+                                            let url = entry.content.clone();
+                                            row = row.child(
+                                                div()
+                                                    .id(("open", index))
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .bg(rgb(colors::ACCENT_SOFT))
+                                                    .text_color(rgb(colors::ACCENT))
+                                                    .text_size(px(11.))
+                                                    .cursor_pointer()
+                                                    .child("打开")
+                                                    .on_click(move |_, _, cx| {
+                                                        cx.stop_propagation();
+                                                        let _ = webbrowser::open(&url);
+                                                    }),
+                                            );
+                                        }
+                                        row = row.child(
+                                            div()
+                                                .id(("delete", index))
+                                                .px_2()
+                                                .py_1()
+                                                .cursor_pointer()
+                                                .text_color(rgb(colors::FAINT))
+                                                .text_size(px(17.))
+                                                .child("×")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.delete(id, cx);
+                                                })),
+                                        );
+                                        div().w_full().h(px(90.)).px_3().pt_2().child(row)
+                                    })
+                                    .collect::<Vec<_>>()
                             }),
-                    )
+                        )
+                        .flex_1(),
+                    ),
+            )
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .bg(rgb(colors::SURFACE))
+                    .border_t_1()
+                    .border_color(rgb(colors::STROKE))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
                     .child(
                         div()
                             .flex()
@@ -334,19 +608,51 @@ impl Render for ClipboardWindow {
                             .text_size(px(11.))
                             .child(
                                 div()
-                                    .id("history-limit")
+                                    .id("win-v")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(if self.config.use_win_v_hotkey {
+                                        colors::ACCENT_SOFT
+                                    } else {
+                                        colors::CANVAS
+                                    }))
+                                    .text_color(rgb(if self.config.use_win_v_hotkey {
+                                        colors::ACCENT
+                                    } else {
+                                        colors::MUTED
+                                    }))
                                     .cursor_pointer()
-                                    .text_color(rgb(0xaebcfb))
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_win_v(cx)))
+                                    .child(if self.config.use_win_v_hotkey {
+                                        "Win+V  开"
+                                    } else {
+                                        "Win+V  启用"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id("history-limit")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(colors::CANVAS))
+                                    .text_color(rgb(colors::MUTED))
+                                    .cursor_pointer()
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.cycle_history_limit(cx)),
                                     )
-                                    .child(format!("历史 {} 条", self.config.max_history)),
+                                    .child(format!("历史 {}", self.config.max_history)),
                             )
                             .child(
                                 div()
                                     .id("image-budget")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(colors::CANVAS))
+                                    .text_color(rgb(colors::MUTED))
                                     .cursor_pointer()
-                                    .text_color(rgb(0xaebcfb))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.cycle_image_budget(cx)),
                                     )
@@ -358,162 +664,44 @@ impl Render for ClipboardWindow {
                             .child(
                                 div()
                                     .id("start-boot")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(colors::CANVAS))
+                                    .text_color(rgb(colors::MUTED))
                                     .cursor_pointer()
-                                    .text_color(rgb(0xaebcfb))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.toggle_start_on_boot(cx)),
                                     )
                                     .child(if self.config.start_on_boot {
-                                        "开机启动：开"
+                                        "开机启动  开"
                                     } else {
-                                        "开机启动：关"
+                                        "开机启动  关"
                                     }),
                             ),
                     )
-                    .child(self.input.clone())
                     .child(
                         div()
-                            .flex()
-                            .gap_1()
-                            .child(filter_button("全部", Filter::All, cx))
-                            .child(filter_button("文字", Filter::Text, cx))
-                            .child(filter_button("图片", Filter::Image, cx))
-                            .child(filter_button("文件", Filter::File, cx))
-                            .child(filter_button("网址", Filter::Url, cx)),
+                            .text_size(px(11.))
+                            .text_color(rgb(if hotkey_error {
+                                colors::DANGER
+                            } else if hotkey_ready {
+                                colors::GREEN
+                            } else {
+                                colors::MUTED
+                            }))
+                            .child(self.hotkey_status.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(if has_error {
+                                colors::DANGER
+                            } else {
+                                colors::MUTED
+                            }))
+                            .child(self.status.clone()),
                     ),
-            )
-            .child(
-                uniform_list(
-                    "history",
-                    self.filtered.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .map(|index| {
-                                let entry = this.filtered[index].clone();
-                                let id = entry.id;
-                                let label = match entry.kind {
-                                    EntryKind::Image => "图片",
-                                    EntryKind::FilePaths => "文件",
-                                    EntryKind::Url => "网址",
-                                    EntryKind::Text => "文字",
-                                };
-                                let preview =
-                                    this.db.as_ref().and_then(|db| db.preview_path(&entry));
-                                if let Some(path) = preview.as_ref()
-                                    && !this.preview_cache.contains(path)
-                                {
-                                    this.preview_cache.push_back(path.clone());
-                                    while this.preview_cache.len() > 24 {
-                                        if let Some(evicted) = this.preview_cache.pop_front() {
-                                            cx.remove_asset::<ImgResourceLoader>(&evicted.into());
-                                        }
-                                    }
-                                }
-                                let mut headline = entry
-                                    .content
-                                    .lines()
-                                    .next()
-                                    .unwrap_or("")
-                                    .chars()
-                                    .take(90)
-                                    .collect::<String>();
-                                if entry.legacy_preview {
-                                    headline = format!("旧记录仅缩略图 · {headline}");
-                                }
-                                let time = DateTime::from_timestamp(entry.updated_at, 0)
-                                    .map(|value| {
-                                        value
-                                            .with_timezone(&Local)
-                                            .format("%m-%d %H:%M")
-                                            .to_string()
-                                    })
-                                    .unwrap_or_else(|| "?".into());
-                                let mut row = div()
-                                    .id(index)
-                                    .w_full()
-                                    .h(px(80.))
-                                    .px_3()
-                                    .py_2()
-                                    .flex()
-                                    .gap_2()
-                                    .border_b_1()
-                                    .border_color(rgb(0x303747))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.copy(id, window, cx)
-                                    }))
-                                    .child(
-                                        div()
-                                            .w(px(48.))
-                                            .h(px(48.))
-                                            .rounded_md()
-                                            .bg(rgb(0x303b54))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(label),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .flex()
-                                            .flex_col()
-                                            .child(headline)
-                                            .child(format!("#{} · {}", entry.id, time)),
-                                    );
-                                if let Some(path) = preview {
-                                    row = row.child(img(path).w(px(48.)).h(px(48.)));
-                                }
-                                if entry.kind == EntryKind::Url {
-                                    let url = entry.content.clone();
-                                    row = row.child(
-                                        div()
-                                            .id(("open", index))
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_md()
-                                            .bg(rgb(0x4263eb))
-                                            .cursor_pointer()
-                                            .child("打开网页")
-                                            .on_click(move |_, _, cx| {
-                                                cx.stop_propagation();
-                                                let _ = webbrowser::open(&url);
-                                            }),
-                                    );
-                                }
-                                row = row.child(
-                                    div()
-                                        .id(("delete", index))
-                                        .px_1()
-                                        .cursor_pointer()
-                                        .text_color(rgb(0xffa8a8))
-                                        .child("×")
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.delete(id, cx);
-                                        })),
-                                );
-                                row
-                            })
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .flex_1(),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .bg(rgb(0x202737))
-                    .child(self.hotkey_status.clone()),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .bg(rgb(0x202737))
-                    .child(self.status.clone()),
             )
     }
 }
@@ -560,6 +748,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: None,
                     kind: WindowKind::PopUp,
                     is_resizable: false,
                     ..Default::default()

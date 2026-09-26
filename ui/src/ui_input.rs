@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::theme as colors;
 use gpui::{
     App, Bounds, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent,
@@ -308,7 +309,7 @@ impl Element for InputElement {
     ) -> Prepaint {
         let input = self.input.read(cx);
         let display = if input.value.is_empty() {
-            "搜索历史…"
+            "搜索文字、网址或文件…"
         } else {
             &input.value
         };
@@ -317,7 +318,7 @@ impl Element for InputElement {
             len: display.len(),
             font: style.font(),
             color: if input.value.is_empty() {
-                rgb(0x929aae).into()
+                rgb(colors::FAINT).into()
             } else {
                 style.color
             },
@@ -343,7 +344,7 @@ impl Element for InputElement {
                         bounds.bottom(),
                     ),
                 ),
-                rgba(0x4263eb66),
+                rgba(0x365bd744),
             ))
         } else {
             None
@@ -355,7 +356,7 @@ impl Element for InputElement {
                     point(bounds.left() + line.x_for_index(offset), bounds.top()),
                     size(px(2.), bounds.bottom() - bounds.top()),
                 ),
-                rgb(0xe9edf7),
+                rgb(colors::ACCENT),
             ))
         } else {
             None
@@ -410,14 +411,26 @@ impl Element for InputElement {
 impl Render for SearchInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .h(px(34.))
+            .h(px(42.))
             .w_full()
-            .px_2()
+            .px_3()
             .rounded_md()
-            .bg(rgb(0x252d3d))
+            .border_1()
+            .border_color(rgb(colors::STROKE))
+            .bg(rgb(colors::CANVAS))
+            .text_color(rgb(colors::INK))
+            .flex()
+            .items_center()
+            .gap_2()
             .track_focus(&self.focus)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_key_down(cx.listener(Self::handle_key))
+            .child(
+                div()
+                    .text_color(rgb(colors::FAINT))
+                    .text_size(px(18.))
+                    .child("⌕"),
+            )
             .child(InputElement { input: cx.entity() })
     }
 }
